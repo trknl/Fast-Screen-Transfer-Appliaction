@@ -133,55 +133,55 @@ public:
 
 		if (SUCCEEDED(hr))
 		{
-			// initilaize the staging texture only once on the first frame
-			if (pStagingTexture == nullptr)
-			{
-				CreateStagingTexture(pTexture);
-			}
+			// ==========================================================
+			// PATH A: THE VIDEO STREAM (Runs every single frame)
+			// ==========================================================
+			// Because we are planning to use Intel Quick Sync, we DO NOT 
+			// map the texture here. We will eventually just pass 'pTexture' 
+			// directly into the encoder. 
+			// e.g., MyEncoder.EncodeFrame(pTexture);
 
-			// high-speed harware copy (GPU to CPU memory)
-			if (pStagingTexture != nullptr)
-			{
-				// clone the image from GPU memory into pStagingTexture which is 
-				// specifically configured to be readable by the CPU
-				pContext->CopyResource(pStagingTexture, pTexture);
 
-				// map the memory to CPU space
-				// obtain a physical address (mapped) so that bytes can be safely read
-				D3D11_MAPPED_SUBRESOURCE mapped;
-				if (SUCCEEDED(pContext->Map(pStagingTexture, 0, D3D11_MAP_READ, 0, &mapped)))
+			// ==========================================================
+			// PATH B: THE SNAPSHOT (Runs ONLY when requested)
+			// ==========================================================
+			// This block only triggers if the user specifically asked for a screenshot.
+			if (m_snapshotRequested && m_pendingCallback)
+			{
+				// 1. Initialize the staging texture
+				if (pStagingTexture == nullptr)
 				{
-					// --- RAW PIXELS READY FOR COMPRESSION/STREAMING ---
-					BYTE* pRawBytes = static_cast<BYTE*>(mapped.pData);
-					//_________________________________________________
-					
-					// execute the callback if a snaphsot was requested
-					if (m_snapshotRequested && m_pendingCallback)
+					CreateStagingTexture(pTexture);
+				}
+
+				// 2. Do the expensive hardware copy ONLY for this specific frame
+				if (pStagingTexture != nullptr)
+				{
+					pContext->CopyResource(pStagingTexture, pTexture);
+
+					// 3. Map the memory to CPU space
+					D3D11_MAPPED_SUBRESOURCE mapped;
+					if (SUCCEEDED(pContext->Map(pStagingTexture, 0, D3D11_MAP_READ, 0, &mapped)))
 					{
-						// get texture dimensions to pass yo your encoder
+						BYTE* pRawBytes = static_cast<BYTE*>(mapped.pData);
+
 						D3D11_TEXTURE2D_DESC desc;
 						pStagingTexture->GetDesc(&desc);
 
-						// fire the callback
+						// 4. Fire the callback to the main program
 						m_pendingCallback(pRawBytes, desc.Width, desc.Height, mapped.RowPitch);
 
-						// reset the request
-						m_snapshotRequested = false;
-						m_pendingCallback = nullptr;
+						// 5. Unlock the texture so the GPU can use it again
+						pContext->Unmap(pStagingTexture, 0);
 					}
-
-
-
-
-
-
-
-
-					//_________________________________________________
-					// call Unmap to unlock the texture so that the GPU can use it again
-					pContext->Unmap(pStagingTexture, 0);
 				}
+
+				// Reset the request so we don't accidentally capture the next frame too
+				m_snapshotRequested = false;
+				m_pendingCallback = nullptr;
 			}
+
+			// Clean up the base texture pointer
 			pTexture->Release();
 		}
 
